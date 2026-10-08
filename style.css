@@ -189,6 +189,29 @@ main { padding: 0 2.4rem 6rem; max-width: 860px; width: 100%; margin: 0 auto; }
   padding: .18rem .4rem; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .tree li a:hover { background: var(--surface-soft); color: var(--ink); }
+/* 저장소 폴더 (사이드바 최하단) */
+.tree .repos { margin-top: 1.4rem; border-top: 1px solid var(--ink); padding-top: .6rem; }
+.tree .repos > summary { font-family: var(--mono); font-size: .66rem; letter-spacing: .12em; color: var(--ink); font-weight: 600; }
+.tree .repos > summary .cnt { margin-left: auto; font-weight: 400; color: var(--text-3); }
+.repo-hint { font-size: .7rem; color: var(--text-3); line-height: 1.5; margin: .3rem 0 .6rem; }
+.repo-tools { display: flex; gap: .3rem; margin-bottom: .4rem; }
+.repo-tools input { flex: 1; min-width: 0; font: inherit; font-size: .74rem; border: 1px solid var(--line-strong); padding: .3rem .45rem; }
+.repo-tools input:focus { outline: none; border-color: var(--ink); }
+.repo-tools .solid { font-size: .66rem; padding: .3rem .55rem; white-space: nowrap; }
+.tree ul#repoList { border-left: 0; margin: 0; padding: 0; }
+.tree li.repo { display: flex; align-items: center; gap: .35rem; border-bottom: 1px solid var(--line); }
+.tree li.repo a.repo-name { flex: 1; min-width: 0; font-weight: 600; color: var(--ink); }
+.tree li.repo a.repo-name::before { content: "📁 "; }
+.tree li.repo a.repo-gh { flex: none; font-size: .6rem; border: 1px solid var(--line-strong); padding: .1rem .35rem; color: var(--text-2); }
+.tree li.repo a.repo-gh:hover { border-color: var(--ink); background: none; }
+.repo-del { color: var(--text-3); font-size: .9rem; padding: 0 .2rem; }
+.repo-del:hover { color: #C62828; }
+.repo-empty { font-size: .74rem; color: var(--text-3); padding: .4rem 0; }
+.field { display: block; font-size: .78rem; font-weight: 600; margin-bottom: .7rem; }
+.field small { font-weight: 400; color: var(--text-3); }
+.field input { display: block; width: 100%; margin-top: .3rem; font: inherit; font-size: .86rem; font-weight: 400; border: 1px solid var(--line-strong); padding: .5rem .6rem; }
+.field input:focus { outline: none; border-color: var(--ink); }
+
 .tree .mode-note { font-size: .7rem; color: var(--text-3); margin-top: 2rem; line-height: 1.5; }
 
 /* ---------- Home ---------- */

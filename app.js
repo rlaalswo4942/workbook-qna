@@ -107,7 +107,8 @@ safe(() => localStorage.setItem('qna-nick', nick));
 
 const channel = () => cur || 'lounge';
 const all = () => [...posts.values()];
-const roots = ch => all().filter(p => !p.parent_id && (!ch || p.chapter === ch));
+// 'repos'(저장소 제출)는 질문이 아니므로 전체 집계에서 제외
+const roots = ch => all().filter(p => !p.parent_id && (ch ? p.chapter === ch : p.chapter !== 'repos'));
 const repliesOf = id => all().filter(p => p.parent_id === id);
 const isMark = p => !p.parent_id && p.quote && /^(guide|s\d+)$/.test(p.block || '');
 const visibleMark = p => isMark(p) && !hidden.has(colorOf(p));
@@ -163,7 +164,7 @@ function dots(list) {
 }
 
 function renderTree() {
-  const tree = $('#tree');
+  const tree = $('#treeNav');
   const folder = (key, cls, summary, body) => {
     const d = h('details', { class: cls, open: treeOpen.has(key) }, h('summary', {}, ...summary), body);
     d.addEventListener('toggle', () => d.open ? treeOpen.add(key) : treeOpen.delete(key));
@@ -183,7 +184,6 @@ function renderTree() {
         d.querySelector('summary').addEventListener('click', () => { if (cur !== c.id) go('#' + c.id); });
         return d;
       })))),
-    h('p', { class: 'mode-note' }, '본문을 드래그하면 형광펜·메모지로 마킹하고 질문할 수 있어요. 모든 글은 익명입니다.'),
   );
 }
 
@@ -558,7 +558,40 @@ function schedule() {
   queued = true;
   requestAnimationFrame(() => { queued = false; if (!cur) renderHome(); refresh(); });
 }
+// ---------- 사이드바 최하단: 저장소 · 과제 제출 링크 ----------
+const isHttps = u => /^https:\/\/\S+$/.test(u || '');
+function renderRepos() {
+  const q = $('#repoSearch').value.trim().toLowerCase();
+  const rs = all().filter(p => p.chapter === 'repos' && isHttps(p.repo_url) && isHttps(p.page_url))
+    .sort((a, b) => a.body.localeCompare(b.body, 'ko'));
+  const shown = rs.filter(p => !q || p.body.toLowerCase().includes(q));
+  $('#repoCnt').textContent = rs.length;
+  $('#repoList').replaceChildren(...(shown.length ? shown.map(p => h('li', { class: 'repo' },
+    h('a', { class: 'repo-name', href: p.page_url, target: '_blank', rel: 'noopener noreferrer', title: '배포 페이지 열기\n' + p.page_url }, p.body),
+    h('a', { class: 'repo-gh mono', href: p.repo_url, target: '_blank', rel: 'noopener noreferrer', title: '저장소 열기\n' + p.repo_url }, 'GitHub'),
+    mine(p) && h('button', { class: 'repo-del', title: '내 링크 삭제', onclick: () => removePost(p, 0) }, '×')))
+    : [h('li', { class: 'repo-empty' }, rs.length ? '검색 결과 없음' : '아직 등록된 저장소가 없어요')]));
+}
+$('#repoSearch').addEventListener('input', renderRepos);
+const repoDlg = $('#repoDlg');
+$('#repoAdd').addEventListener('click', () => {
+  const f = $('#repoForm');
+  if (!f.elements.name.value) f.elements.name.value = nick;
+  repoDlg.showModal();
+});
+repoDlg.addEventListener('close', async () => {
+  if (repoDlg.returnValue !== 'ok') return;
+  const f = $('#repoForm'), name = f.elements.name.value.trim(), repo = f.elements.repo.value.trim(), page = f.elements.page.value.trim();
+  if (!name || !/^https:\/\/github\.com\/\S+\/\S+/.test(repo) || !isHttps(page)) { alert('이름과 https:// 링크 두 개를 확인해 주세요.'); return repoDlg.showModal(); }
+  try {
+    ingest(await store.add({ chapter: 'repos', body: name.slice(0, 30), nick, repo_url: repo, page_url: page }));
+    f.reset();
+    $('#repoBox').open = true;
+  } catch (err) { alert('등록 실패: ' + err.message); repoDlg.showModal(); }
+});
+
 function refresh() {
+  renderRepos();
   renderTree();
   renderStrip();
   renderChat();

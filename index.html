@@ -7,7 +7,7 @@
 <meta name="description" content="바이브코딩 워크북 장별 가이드 + 익명 질문답변. 모르는 부분에 형광펜을 긋고 질문하면 아는 사람이 답합니다.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%96%8D%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 
@@ -25,7 +25,19 @@
 </nav>
 
 <div class="layout">
-  <aside class="side tree" id="tree" aria-label="목차"></aside>
+  <aside class="side tree" id="tree" aria-label="목차">
+    <div id="treeNav"></div>
+    <details class="repos" id="repoBox" open>
+      <summary>저장소 · 과제 제출 <span class="cnt mono" id="repoCnt">0</span></summary>
+      <p class="repo-hint">과제는 GitHub 저장소 + 배포 페이지 링크로 제출해요. 이름을 누르면 페이지가 열려요.</p>
+      <div class="repo-tools">
+        <input id="repoSearch" type="search" placeholder="이름 검색" aria-label="저장소 이름 검색">
+        <button class="solid mono" id="repoAdd" type="button">+ 내 링크</button>
+      </div>
+      <ul id="repoList"></ul>
+    </details>
+    <p class="mode-note">본문을 드래그하면 형광펜·메모지로 마킹하고 질문할 수 있어요. 모든 글은 익명입니다.</p>
+  </aside>
   <main id="main"></main>
   <aside class="side chat" id="chat" aria-label="질문 채팅">
     <div class="chat-head">
@@ -59,6 +71,20 @@
 
 <div class="markmenu" id="markmenu" hidden></div>
 
+<dialog id="repoDlg">
+  <form method="dialog" id="repoForm">
+    <p class="eyebrow mono">저장소 · 배포 페이지 등록</p>
+    <label class="field">이름 <small>(목록에 표시, 30자 이내)</small><input name="name" maxlength="30" required></label>
+    <label class="field">GitHub 저장소 링크<input name="repo" type="url" required pattern="https://github\.com/.+/.+" placeholder="https://github.com/아이디/my-game"></label>
+    <label class="field">배포 페이지 링크<input name="page" type="url" required pattern="https://.+" placeholder="https://아이디.github.io/my-game/"></label>
+    <p class="repo-hint">로그아웃 상태(또는 휴대폰 데이터)에서도 두 링크가 열리는지 확인하고 올려주세요.</p>
+    <div class="ask-actions">
+      <button value="cancel" formnovalidate class="ghost mono">취소</button>
+      <button value="ok" class="solid mono">올리기</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="askDlg">
   <form method="dialog" id="askForm">
     <p class="eyebrow mono">새 마킹 · 질문</p>
@@ -82,6 +108,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
 <script src="data/chapters.js"></script>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

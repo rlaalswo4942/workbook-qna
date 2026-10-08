@@ -11,9 +11,13 @@ create table if not exists public.posts (
   style       text check (style in ('highlight', 'sticky')),
   body        text not null check (char_length(body) between 1 and 2000),
   nick        text not null check (char_length(nick) between 1 and 30),
-  owner_hash  text check (char_length(owner_hash) = 64)  -- 작성자 브라우저 토큰의 SHA-256
+  owner_hash  text check (char_length(owner_hash) = 64),  -- 작성자 브라우저 토큰의 SHA-256
+  repo_url    text check (repo_url ~ '^https://github\.com/' and char_length(repo_url) <= 300),  -- chapter='repos' 과제 제출
+  page_url    text check (page_url ~ '^https://' and char_length(page_url) <= 300)
 );
 alter table public.posts add column if not exists owner_hash text check (char_length(owner_hash) = 64);
+alter table public.posts add column if not exists repo_url text check (repo_url ~ '^https://github\.com/' and char_length(repo_url) <= 300);
+alter table public.posts add column if not exists page_url text check (page_url ~ '^https://' and char_length(page_url) <= 300);
 
 -- 익명: 누구나 읽고 쓸 수 있음. 직접 수정·삭제는 막고, 본인 삭제는 아래 delete_post 함수로만 허용
 alter table public.posts enable row level security;
