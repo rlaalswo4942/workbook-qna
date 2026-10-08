@@ -46,11 +46,16 @@ function makeStore() {
       async remove(id) { const { data, error } = await db.rpc('delete_post', { p_id: id, p_secret: SECRET }); if (error) throw error; if (!data) throw new Error('본인 글이 아니거나 이미 삭제됐어요'); },
       // 마킹 형태(색·형광펜/메모지) 변경도 update_mark 함수가 본인 확인 후 수행
       async update(id, v) { const { data, error } = await db.rpc('update_mark', { p_id: id, p_secret: SECRET, p_color: v.color, p_style: v.style }); if (error) throw error; if (!data) throw new Error('본인 마킹이 아니거나 삭제됐어요'); },
-      onChange(add, del, upd) {
+      // 구독 연결(재연결 포함)까지 몇 초 걸리므로, 연결될 때마다 서버 목록으로 다시 맞춘다
+      onChange(add, del, upd, sync) {
         const t = { schema: 'public', table: 'posts' };
         db.channel('posts').on('postgres_changes', { ...t, event: 'INSERT' }, e => add(e.new))
           .on('postgres_changes', { ...t, event: 'UPDATE' }, e => upd(e.new))
-          .on('postgres_changes', { ...t, event: 'DELETE' }, e => del(e.old.id)).subscribe();
+          .on('postgres_changes', { ...t, event: 'DELETE' }, e => del(e.old.id))
+          // 'SUBSCRIBED' 뒤에도 DB 감지가 늦게 붙으므로 서버의 'Subscribed to PostgreSQL' 시점에도 맞춘다
+          .on('system', {}, m => { if (m?.extension === 'postgres_changes' && m.status === 'ok') resync(); })
+          .subscribe(status => { if (status === 'SUBSCRIBED') resync(); });
+        const resync = () => this.list().then(sync, () => {});
       },
     };
   }
@@ -511,9 +516,13 @@ function showMarkMenu(el) {
   menu.style.left = Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, scrollX + r.right - menu.offsetWidth / 2)) + 'px';
 }
 async function change(p, v) {
-  const next = { color: colorOf(p), style: p.style === 'sticky' ? 'sticky' : 'highlight', ...v };
-  try { await store.update(p.id, next); upsert({ ...p, ...next }); }
-  catch (err) { alert('변경 실패: ' + err.message); }
+  // 최신 상태 기준으로 계산하고 즉시 반영 → 빠르게 연속으로 눌러도 앞의 변경이 덮이지 않음. 실패하면 되돌림
+  const before = posts.get(p.id);
+  if (!before) return;
+  const next = { color: colorOf(before), style: before.style === 'sticky' ? 'sticky' : 'highlight', ...v };
+  upsert({ id: p.id, ...next });
+  try { await store.update(p.id, next); }
+  catch (err) { upsert(before); alert('변경 실패: ' + err.message); }
 }
 // composedPath: 버튼이 메뉴 재렌더로 분리돼도 클릭 시점 경로로 판단
 document.addEventListener('click', e => { if (!menu.hidden && !e.composedPath().includes(menu)) hideMenu(); });
@@ -614,6 +623,11 @@ function upsert(p) {
   if (menuFor === p.id) showMarkMenu(main.querySelector(`mark[data-id="${p.id}"]`));
   schedule();
 }
+function sync(rows) {
+  const ids = new Set(rows.map(r => r.id));
+  rows.forEach(r => posts.has(r.id) ? upsert(r) : ingest(r));
+  all().filter(p => !ids.has(p.id)).forEach(p => drop(p.id));
+}
 function drop(id) {
   if (menuFor === id) hideMenu();
   if (!posts.has(id)) return;
@@ -634,6 +648,6 @@ route();
 store.list()
   .then(rows => { rows.forEach(r => posts.set(r.id, r)); if (!cur) renderHome(); route(); })
   .catch(err => { $('#mode').textContent = '불러오기 실패: ' + err.message; });
-store.onChange(ingest, drop, upsert);
+store.onChange(ingest, drop, upsert, sync);
 OWNER.then(h => { myHash = h; schedule(); });
 })();
