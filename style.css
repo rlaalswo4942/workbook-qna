@@ -338,7 +338,10 @@ textarea:focus { outline: none; border-color: var(--ink); }
 .post-body { font-size: .86rem; white-space: pre-wrap; word-break: break-word; margin: .25rem 0 0; }
 .post-actions { margin-top: .35rem; }
 .post-actions button { font-family: var(--mono); font-size: .62rem; color: var(--text-3); letter-spacing: .05em; }
+.post-actions { display: flex; gap: .9rem; }
 .post-actions button:hover { color: var(--ink); }
+.post-actions .del:hover { color: #C62828; }
+.post-meta .me { border: 1px solid var(--line-strong); padding: 0 .3rem; font-size: .58rem; }
 .replies { margin: .5rem 0 0 .3rem; padding-left: .8rem; border-left: 2px solid var(--line); }
 .replies .post { padding: .5rem 0; border-bottom: 0; }
 .composer { border-top: 1px solid var(--ink); padding: .7rem 1rem; display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; }

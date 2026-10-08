@@ -25,6 +25,14 @@ const chById = id => CH.find(c => c.id === id);
 const chNum = c => c.group === 'app' ? '부록 ' + c.num : c.num + '장';
 const plain = s => s.replace(/\*\*|`/g, '');
 
+// ---------- 본인 확인: 브라우저별 비밀 토큰, 글에는 해시만 저장 ----------
+const SECRET = safe(() => localStorage.getItem('qna-owner')) || crypto.randomUUID();
+safe(() => localStorage.setItem('qna-owner', SECRET));
+const OWNER = crypto.subtle.digest('SHA-256', new TextEncoder().encode(SECRET))
+  .then(b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join(''));
+let myHash = '';
+const mine = p => !!p.owner_hash && p.owner_hash === myHash;
+
 // ---------- 저장소: Supabase(실시간) 또는 로컬(이 브라우저 + 탭 간 동기화) ----------
 function makeStore() {
   if (CFG.supabaseUrl && CFG.supabaseKey && window.supabase) {
@@ -33,8 +41,14 @@ function makeStore() {
       live: true,
       // ponytail: 전체 글을 한 번에 로드, 글이 수천 개를 넘으면 장별 페이지 로딩으로 바꿀 것
       async list() { const { data, error } = await db.from('posts').select('*').order('id').limit(5000); if (error) throw error; return data; },
-      async add(p) { const { data, error } = await db.from('posts').insert(p).select().single(); if (error) throw error; return data; },
-      onInsert(cb) { db.channel('posts').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, e => cb(e.new)).subscribe(); },
+      async add(p) { const { data, error } = await db.from('posts').insert({ ...p, owner_hash: await OWNER }).select().single(); if (error) throw error; return data; },
+      // 삭제는 supabase.sql의 delete_post 함수가 토큰 해시를 확인한 뒤에만 수행 (답변도 함께 삭제)
+      async remove(id) { const { data, error } = await db.rpc('delete_post', { p_id: id, p_secret: SECRET }); if (error) throw error; if (!data) throw new Error('본인 글이 아니거나 이미 삭제됐어요'); },
+      onChange(add, del) {
+        const t = { schema: 'public', table: 'posts' };
+        db.channel('posts').on('postgres_changes', { ...t, event: 'INSERT' }, e => add(e.new))
+          .on('postgres_changes', { ...t, event: 'DELETE' }, e => del(e.old.id)).subscribe();
+      },
     };
   }
   const KEY = 'qna-local-posts';
@@ -44,12 +58,18 @@ function makeStore() {
     live: false,
     async list() { return read(); },
     async add(p) {
-      const row = { ...p, id: Date.now(), created_at: new Date().toISOString() };
+      const row = { ...p, owner_hash: await OWNER, id: Date.now(), created_at: new Date().toISOString() };
       localStorage.setItem(KEY, JSON.stringify([...read(), row]));
       bc?.postMessage(row);
       return row;
     },
-    onInsert(cb) { if (bc) bc.onmessage = e => cb(e.data); },
+    async remove(id) {
+      const rows = read(), row = rows.find(r => r.id === id);
+      if (!row || row.owner_hash !== await OWNER) throw new Error('본인 글이 아니거나 이미 삭제됐어요');
+      localStorage.setItem(KEY, JSON.stringify(rows.filter(r => r.id !== id && r.parent_id !== id)));
+      bc?.postMessage({ deleted: id });
+    },
+    onChange(add, del) { if (bc) bc.onmessage = e => e.data.deleted ? del(e.data.deleted) : add(e.data); },
   };
 }
 
@@ -353,12 +373,14 @@ askDlg.addEventListener('close', async () => {
 function postEl(p, isReply) {
   const kids = isReply ? [] : repliesOf(p.id);
   return h('div', { class: 'post', id: 'post-' + p.id },
-    h('div', { class: 'post-meta' }, h('b', {}, p.nick), fmt(p.created_at),
+    h('div', { class: 'post-meta' }, h('b', {}, p.nick), fmt(p.created_at), mine(p) && h('span', { class: 'me' }, '내 글'),
       isMark(p) && h('span', { class: 'tag' }, '● ' + label(colorOf(p)) + (p.style === 'sticky' ? ' · 메모' : ''))),
     isMark(p) && h('button', { class: `post-quote c-${colorOf(p)}`, onclick: () => go(`#${p.chapter}:m${p.id}`) },
       h('span', { class: 'go' }, '↗ 위치'), '“' + p.quote + '”'),
     h('p', { class: 'post-body' }, p.body),
-    !isReply && h('div', { class: 'post-actions' }, h('button', { onclick: () => setReply(p) }, `↳ 답변하기${kids.length ? ` (${kids.length})` : ''}`)),
+    (!isReply || mine(p)) && h('div', { class: 'post-actions' },
+      !isReply && h('button', { onclick: () => setReply(p) }, `↳ 답변하기${kids.length ? ` (${kids.length})` : ''}`),
+      mine(p) && h('button', { class: 'del', onclick: () => removePost(p, kids.length) }, isMark(p) ? '마킹 지우기' : '삭제')),
     kids.length ? h('div', { class: 'replies' }, kids.map(k => postEl(k, true))) : null);
 }
 
@@ -373,11 +395,19 @@ function renderChat() {
   let rs = roots(channel());
   if (chatFilter === 'open') rs = rs.filter(p => !repliesOf(p.id).length);
   if (chatFilter === 'marks') rs = rs.filter(isMark);
+  if (chatFilter === 'mine') rs = rs.filter(p => mine(p) || repliesOf(p.id).some(mine));
   rs = rs.filter(p => !isMark(p) || !hidden.has(colorOf(p)));
   list.replaceChildren(...(rs.length ? rs.map(p => postEl(p)) : [h('p', { class: 'empty' },
     c ? '아직 글이 없어요.\n본문을 드래그해서 마킹하거나\n아래에 바로 질문을 남겨보세요.' : '자유롭게 이야기하는 곳이에요.\n장별 질문은 각 장을 열면 나와요.')]));
   if (atBottom) list.scrollTop = list.scrollHeight;
   firstChat = false;
+}
+
+async function removePost(p, n) {
+  if (!confirm((isMark(p) ? '이 마킹과 질문을 지울까요?' : '이 글을 지울까요?') + (n ? `
+달린 답변 ${n}개도 함께 지워집니다.` : ''))) return;
+  try { await store.remove(p.id); drop(p.id); }
+  catch (err) { alert('삭제 실패: ' + err.message); }
 }
 
 function setReply(p) {
@@ -466,6 +496,11 @@ function jumpToMark(id) {
 
 // ---------- 갱신 ----------
 let queued = false;
+function schedule() {
+  if (queued) return;
+  queued = true;
+  requestAnimationFrame(() => { queued = false; if (!cur) renderHome(); refresh(); });
+}
 function refresh() {
   renderTree();
   renderStrip();
@@ -476,9 +511,17 @@ function ingest(p) {
   if (!p || posts.has(p.id)) return;
   posts.set(p.id, p);
   if (p.chapter === channel() && !document.body.classList.contains('chat-open') && innerWidth <= 1240) $('#chatDot').hidden = false;
-  if (queued) return;
-  queued = true;
-  requestAnimationFrame(() => { queued = false; if (!cur) renderHome(); refresh(); });
+  schedule();
+}
+function drop(id) {
+  if (!posts.has(id)) return;
+  if (replyTo?.id === id) setReply(null);
+  for (const g of [id, ...repliesOf(id).map(r => r.id)]) {
+    posts.delete(g);
+    applied.delete(g);
+    main.querySelectorAll(`mark[data-id="${g}"]`).forEach(m => { const par = m.parentNode; m.replaceWith(...m.childNodes); par.normalize(); });
+  }
+  schedule();
 }
 
 marked.use({ gfm: true });
@@ -489,5 +532,6 @@ route();
 store.list()
   .then(rows => { rows.forEach(r => posts.set(r.id, r)); if (!cur) renderHome(); route(); })
   .catch(err => { $('#mode').textContent = '불러오기 실패: ' + err.message; });
-store.onInsert(ingest);
+store.onChange(ingest, drop);
+OWNER.then(h => { myHash = h; schedule(); });
 })();

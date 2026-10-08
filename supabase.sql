@@ -10,15 +10,31 @@ create table if not exists public.posts (
   color       text check (color in ('yellow', 'pink', 'green', 'blue')),
   style       text check (style in ('highlight', 'sticky')),
   body        text not null check (char_length(body) between 1 and 2000),
-  nick        text not null check (char_length(nick) between 1 and 30)
+  nick        text not null check (char_length(nick) between 1 and 30),
+  owner_hash  text check (char_length(owner_hash) = 64)  -- 작성자 브라우저 토큰의 SHA-256
 );
+alter table public.posts add column if not exists owner_hash text check (char_length(owner_hash) = 64);
 
--- 익명: 누구나 읽고 쓸 수 있지만 수정/삭제는 불가 (삭제는 대시보드에서 관리자만)
+-- 익명: 누구나 읽고 쓸 수 있음. 직접 수정·삭제는 막고, 본인 삭제는 아래 delete_post 함수로만 허용
 alter table public.posts enable row level security;
 drop policy if exists "anyone can read" on public.posts;
 drop policy if exists "anyone can post" on public.posts;
 create policy "anyone can read" on public.posts for select to anon, authenticated using (true);
 create policy "anyone can post" on public.posts for insert to anon, authenticated with check (true);
 
--- 실시간 구독
+-- 본인 글 삭제: 토큰 원문을 받아 해시가 일치할 때만 삭제 (답변은 cascade로 함께 삭제)
+create extension if not exists pgcrypto with schema extensions;
+create or replace function public.delete_post(p_id bigint, p_secret text) returns boolean
+language sql security definer set search_path = public, extensions as $$
+  with d as (
+    delete from public.posts
+    where id = p_id and owner_hash = encode(extensions.digest(p_secret, 'sha256'), 'hex')
+    returning 1
+  )
+  select exists (select 1 from d);
+$$;
+revoke all on function public.delete_post(bigint, text) from public;
+grant execute on function public.delete_post(bigint, text) to anon, authenticated;
+
+-- 실시간 구독 (INSERT/DELETE)
 alter publication supabase_realtime add table public.posts;
