@@ -54,4 +54,9 @@ revoke all on function public.update_mark(bigint, text, text, text) from public;
 grant execute on function public.update_mark(bigint, text, text, text) to anon, authenticated;
 
 -- 실시간 구독 (INSERT/UPDATE/DELETE)
-alter publication supabase_realtime add table public.posts;
+-- 이미 등록돼 있으면 건너뜀 → 이 파일 전체를 다시 실행해도 에러 없음
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'posts') then
+    alter publication supabase_realtime add table public.posts;
+  end if;
+end $$;
