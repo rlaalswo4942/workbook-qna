@@ -44,9 +44,12 @@ function makeStore() {
       async add(p) { const { data, error } = await db.from('posts').insert({ ...p, owner_hash: await OWNER }).select().single(); if (error) throw error; return data; },
       // 삭제는 supabase.sql의 delete_post 함수가 토큰 해시를 확인한 뒤에만 수행 (답변도 함께 삭제)
       async remove(id) { const { data, error } = await db.rpc('delete_post', { p_id: id, p_secret: SECRET }); if (error) throw error; if (!data) throw new Error('본인 글이 아니거나 이미 삭제됐어요'); },
-      onChange(add, del) {
+      // 마킹 형태(색·형광펜/메모지) 변경도 update_mark 함수가 본인 확인 후 수행
+      async update(id, v) { const { data, error } = await db.rpc('update_mark', { p_id: id, p_secret: SECRET, p_color: v.color, p_style: v.style }); if (error) throw error; if (!data) throw new Error('본인 마킹이 아니거나 삭제됐어요'); },
+      onChange(add, del, upd) {
         const t = { schema: 'public', table: 'posts' };
         db.channel('posts').on('postgres_changes', { ...t, event: 'INSERT' }, e => add(e.new))
+          .on('postgres_changes', { ...t, event: 'UPDATE' }, e => upd(e.new))
           .on('postgres_changes', { ...t, event: 'DELETE' }, e => del(e.old.id)).subscribe();
       },
     };
@@ -69,7 +72,16 @@ function makeStore() {
       localStorage.setItem(KEY, JSON.stringify(rows.filter(r => r.id !== id && r.parent_id !== id)));
       bc?.postMessage({ deleted: id });
     },
-    onChange(add, del) { if (bc) bc.onmessage = e => e.data.deleted ? del(e.data.deleted) : add(e.data); },
+    async update(id, v) {
+      const rows = read(), row = rows.find(r => r.id === id);
+      if (!row || row.owner_hash !== await OWNER) throw new Error('본인 마킹이 아니거나 삭제됐어요');
+      Object.assign(row, v);
+      localStorage.setItem(KEY, JSON.stringify(rows));
+      bc?.postMessage({ updated: row });
+    },
+    onChange(add, del, upd) {
+      if (bc) bc.onmessage = ({ data: d }) => d.deleted ? del(d.deleted) : d.updated ? upd(d.updated) : add(d);
+    },
   };
 }
 
@@ -460,11 +472,48 @@ function closePanels() { document.body.classList.remove('chat-open', 'tree-open'
 $('#tree').addEventListener('click', e => { if (e.target.closest('a')) document.body.classList.remove('tree-open'); });
 main.addEventListener('click', e => {
   const m = e.target.closest('mark.hl');
-  if (m && getSelection().isCollapsed) { openChat(); flashPost(m.dataset.id); }
+  if (m && getSelection().isCollapsed) { e.stopPropagation(); showMarkMenu(m); }
 });
 
+// ---------- 마킹 메뉴: 마킹(아이콘 포함)을 누르면 열림. 형태 변경·삭제는 본인 마킹만 ----------
+const menu = $('#markmenu');
+let menuFor = null;
+function hideMenu() { menu.hidden = true; menuFor = null; }
+function showMarkMenu(el) {
+  const p = el && posts.get(+el.dataset.id);
+  if (!p) return hideMenu();
+  menuFor = p.id;
+  const own = mine(p), n = repliesOf(p.id).length, sticky = p.style === 'sticky';
+  const btn = (text, on, fn, cls = '') => h('button', { type: 'button', class: cls + (on ? ' on' : ''), onclick: fn }, text);
+  menu.replaceChildren(...[
+    h('div', { class: 'mm-head mono' }, h('i', { style: `background:var(--${colorOf(p)})` }), label(colorOf(p)), ' · ', p.nick,
+      h('span', {}, n ? `답변 ${n}` : '답변 대기')),
+    h('p', { class: 'mm-body' }, p.body),
+    own && h('div', { class: 'mm-row seg mono' },
+      btn('형광펜', !sticky, () => change(p, { style: 'highlight' })), btn('메모지', sticky, () => change(p, { style: 'sticky' }))),
+    own && h('div', { class: 'mm-row swatches' }, COLORS.map(([c, name]) =>
+      h('button', { type: 'button', class: `swatch c-${c}${c === colorOf(p) ? ' on' : ''}`, onclick: () => change(p, { color: c }) }, name))),
+    h('div', { class: 'mm-row mm-actions mono' },
+      btn('💬 질문 보기', false, () => { hideMenu(); openChat(); flashPost(p.id); }),
+      own && btn('삭제', false, () => { hideMenu(); removePost(p, n); }, 'del')),
+  ].filter(Boolean));
+  menu.hidden = false;
+  const r = [...el.getClientRects()].pop() || el.getBoundingClientRect();
+  menu.style.top = (scrollY + r.bottom + 6) + 'px';
+  menu.style.left = Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, scrollX + r.right - menu.offsetWidth / 2)) + 'px';
+}
+async function change(p, v) {
+  const next = { color: colorOf(p), style: p.style === 'sticky' ? 'sticky' : 'highlight', ...v };
+  try { await store.update(p.id, next); upsert({ ...p, ...next }); }
+  catch (err) { alert('변경 실패: ' + err.message); }
+}
+// composedPath: 버튼이 메뉴 재렌더로 분리돼도 클릭 시점 경로로 판단
+document.addEventListener('click', e => { if (!menu.hidden && !e.composedPath().includes(menu)) hideMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideMenu(); });
+
 // ---------- 라우팅: #ch2, #ch2:s3(섹션), #ch2:guide, #ch2:m123(마킹) ----------
-function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
+function go(hash) {
+  hideMenu(); if (location.hash === hash) route(); else location.hash = hash; }
 
 function route() {
   const [id, part = ''] = decodeURIComponent(location.hash.slice(1)).split(':');
@@ -513,7 +562,19 @@ function ingest(p) {
   if (p.chapter === channel() && !document.body.classList.contains('chat-open') && innerWidth <= 1240) $('#chatDot').hidden = false;
   schedule();
 }
+function upsert(p) {
+  if (!posts.has(p.id)) return ingest(p);
+  posts.set(p.id, { ...posts.get(p.id), ...p });
+  const q = posts.get(p.id);
+  main.querySelectorAll(`mark[data-id="${p.id}"]`).forEach(m => {
+    m.classList.remove('highlight', 'sticky', ...COLORS.map(c => 'c-' + c[0]));
+    m.classList.add(q.style === 'sticky' ? 'sticky' : 'highlight', 'c-' + colorOf(q));
+  });
+  if (menuFor === p.id) showMarkMenu(main.querySelector(`mark[data-id="${p.id}"]`));
+  schedule();
+}
 function drop(id) {
+  if (menuFor === id) hideMenu();
   if (!posts.has(id)) return;
   if (replyTo?.id === id) setReply(null);
   for (const g of [id, ...repliesOf(id).map(r => r.id)]) {
@@ -532,6 +593,6 @@ route();
 store.list()
   .then(rows => { rows.forEach(r => posts.set(r.id, r)); if (!cur) renderHome(); route(); })
   .catch(err => { $('#mode').textContent = '불러오기 실패: ' + err.message; });
-store.onChange(ingest, drop);
+store.onChange(ingest, drop, upsert);
 OWNER.then(h => { myHash = h; schedule(); });
 })();

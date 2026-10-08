@@ -305,6 +305,24 @@ body.hide-yellow mark.hl.c-yellow::after, body.hide-pink mark.hl.c-pink::after, 
 .swatches .swatch { border: 2px solid transparent; }
 .swatches .swatch.on { border-color: var(--ink); }
 
+/* 마킹 메뉴 (마킹/메모지 아이콘 클릭) */
+.markmenu {
+  position: absolute; z-index: 40; width: 260px; background: var(--bg);
+  border: 1px solid var(--ink); box-shadow: 0 6px 18px rgba(0,0,0,.14); padding: .7rem .8rem;
+}
+.markmenu[hidden] { display: none; }
+.mm-head { display: flex; align-items: center; gap: .3rem; font-size: .64rem; color: var(--text-3); }
+.mm-head i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.mm-head span { margin-left: auto; }
+.mm-body { font-size: .84rem; margin: .4rem 0 .6rem; max-height: 4.6em; overflow: hidden; white-space: pre-wrap; word-break: break-word; }
+.mm-row { display: flex; gap: .3rem; margin-top: .45rem; }
+.mm-row.seg button { flex: 1; font-size: .66rem; padding: .3rem; border: 1px solid var(--line-strong); }
+.mm-row.seg button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.mm-actions { justify-content: space-between; border-top: 1px solid var(--line); padding-top: .5rem; margin-top: .6rem; }
+.mm-actions button { font-size: .66rem; color: var(--text-2); }
+.mm-actions button:hover { color: var(--ink); }
+.mm-actions .del { color: #C62828; }
+
 dialog { border: 1px solid var(--ink); padding: 1.4rem; width: min(480px, calc(100vw - 32px)); }
 dialog::backdrop { background: rgba(17,17,17,.35); }
 dialog blockquote { margin: 0 0 1rem; padding: .5rem .8rem; background: var(--surface-soft); border-left: 3px solid var(--ink); font-size: .85rem; max-height: 7rem; overflow: auto; }

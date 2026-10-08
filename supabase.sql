@@ -36,5 +36,18 @@ $$;
 revoke all on function public.delete_post(bigint, text) from public;
 grant execute on function public.delete_post(bigint, text) to anon, authenticated;
 
--- 실시간 구독 (INSERT/DELETE)
+-- 본인 마킹 형태 변경(색·형광펜/메모지): 같은 해시 확인. 값 검증은 테이블 check 제약이 한다
+create or replace function public.update_mark(p_id bigint, p_secret text, p_color text, p_style text) returns boolean
+language sql security definer set search_path = public, extensions as $$
+  with u as (
+    update public.posts set color = p_color, style = p_style
+    where id = p_id and owner_hash = encode(extensions.digest(p_secret, 'sha256'), 'hex')
+    returning 1
+  )
+  select exists (select 1 from u);
+$$;
+revoke all on function public.update_mark(bigint, text, text, text) from public;
+grant execute on function public.update_mark(bigint, text, text, text) to anon, authenticated;
+
+-- 실시간 구독 (INSERT/UPDATE/DELETE)
 alter publication supabase_realtime add table public.posts;
