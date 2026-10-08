@@ -59,7 +59,15 @@ function makeStore() {
   const read = () => safe(() => JSON.parse(localStorage.getItem(KEY) || '[]'), []);
   return {
     live: false,
-    async list() { return read(); },
+    async list() {
+      // 로컬 글은 전부 이 브라우저에서 쓴 것 → 삭제 기능 이전 글(owner_hash 없음)도 본인 글로 채움
+      const rows = read(), mineHash = await OWNER;
+      if (rows.some(r => !r.owner_hash)) {
+        rows.forEach(r => { r.owner_hash ||= mineHash; });
+        safe(() => localStorage.setItem(KEY, JSON.stringify(rows)));
+      }
+      return rows;
+    },
     async add(p) {
       const row = { ...p, owner_hash: await OWNER, id: Date.now(), created_at: new Date().toISOString() };
       localStorage.setItem(KEY, JSON.stringify([...read(), row]));
