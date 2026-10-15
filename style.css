@@ -446,6 +446,28 @@ a.place:hover { outline: 2px solid var(--ink); outline-offset: 1px; }
 section.flash, .place-card.flash { outline: 2px solid var(--ink); outline-offset: 4px; }
 @media (max-width: 860px) { .wtable td:first-child { white-space: normal; } .d-block ol.how { padding-left: 1.2rem; } .steps .ok, .steps .tip { margin-left: 0; } }
 
+/* ---------- 이름 로그인 · 개인 공간 ---------- */
+body.gate .side, body.gate .markbar, body.gate #catnav, body.gate #btnChat, body.gate #btnTree { display: none; }
+body.gate .layout { grid-template-columns: minmax(0, 1fr); }
+.gate-box { max-width: 34rem; margin: 0 auto; padding: 3.5rem 0 4rem; }
+.gate-box h1 { font-size: clamp(2.2rem, 6vw, 3.2rem); font-weight: 800; letter-spacing: -0.02em; line-height: 1; margin: .4rem 0 1.2rem; }
+.gate-box .pitch { font-size: 1.05rem; color: var(--text-2); margin: 0 0 1rem; }
+.gate-list { margin: 0 0 1.6rem; padding-left: 1.1rem; font-size: .9rem; color: var(--text-2); display: flex; flex-direction: column; gap: .35rem; }
+.gate-list b { color: var(--ink); }
+.gate-form { display: flex; gap: .5rem; }
+.gate-form input { flex: 1; min-width: 0; font: inherit; font-size: 1rem; padding: .6rem .8rem; border: 1px solid var(--ink); border-radius: 0; }
+.gate-form button { padding: 0 1.1rem; }
+.gate-msg { min-height: 1.4em; font-size: .85rem; color: var(--ink); margin: .6rem 0; }
+.gate-note { font-size: .78rem; color: var(--text-3); border-top: 1px solid var(--line); padding-top: .8rem; }
+mark.hl.private { outline: 1px dashed var(--ink); outline-offset: 1px; }
+mark.hl.private.last::before { content: "🔒"; font-size: .7em; margin-right: 1px; }
+.private-toggle { display: flex; align-items: center; gap: .45rem; font-size: .82rem; margin: .6rem 0 0; cursor: pointer; }
+body.chat-private .composer { display: none; }
+.priv-note { font-size: .7rem; color: var(--text-3); margin: .2rem 0 .5rem; }
+textarea.memo { width: 100%; font: inherit; font-size: .88rem; line-height: 1.6; padding: .6rem .7rem; border: 1px solid var(--ink); border-radius: 0; resize: vertical; background: var(--surface-soft); }
+.priv-marks { margin-top: 1rem; }
+.priv-marks .eyebrow { margin: 0 0 .4rem; }
+
 @media (max-width: 1240px) {
   .layout { grid-template-columns: 250px minmax(0, 1fr); }
   .side.chat {

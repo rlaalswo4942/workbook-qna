@@ -25,27 +25,36 @@ const chById = id => CH.find(c => c.id === id);
 const chNum = c => c.group === 'app' ? '부록 ' + c.num : c.num + '장';
 const plain = s => s.replace(/\*\*|`/g, '');
 
-// ---------- 본인 확인: 브라우저별 비밀 토큰, 글에는 해시만 저장 ----------
-const SECRET = safe(() => localStorage.getItem('qna-owner')) || crypto.randomUUID();
-safe(() => localStorage.setItem('qna-owner', SECRET));
-const OWNER = crypto.subtle.digest('SHA-256', new TextEncoder().encode(SECRET))
+// ---------- 이름 로그인 (스터디_프레임 features.login 방식) ----------
+// 이름 = 개인 아이디(비밀번호·인원 제한 없음). 같은 이름이면 어느 기기에서든 같은 사람으로 본다.
+// 비밀 = 'workbook-qna:user:' + 아이디, 글·개인 공간에는 그 SHA-256만 저장 → 공유 글의 본인 삭제와 개인 메모의 열쇠
+const USER_KEY = 'qna-user';
+const cleanName = n => String(n || '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+const secretOf = id => 'workbook-qna:user:' + id;
+const sha = s => crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
   .then(b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join(''));
-let myHash = '';
-const mine = p => !!p.owner_hash && p.owner_hash === myHash;
+const USER = safe(() => JSON.parse(localStorage.getItem(USER_KEY)), null);
+const SECRET = USER ? secretOf(USER.id) : '';
+// 로그인 기능 전에 이 브라우저 토큰으로 쓴 글도 계속 본인 글로 지울 수 있게 남겨 둔다
+const LEGACY = safe(() => localStorage.getItem('qna-owner'), null);
+const OWNER = sha(SECRET);
+let myHash = '', legacyHash = '';
+const mine = p => !!p.owner_hash && (p.owner_hash === myHash || (!!legacyHash && p.owner_hash === legacyHash));
+const secretFor = p => legacyHash && p.owner_hash === legacyHash ? LEGACY : SECRET;
 
 // ---------- 저장소: Supabase(실시간) 또는 로컬(이 브라우저 + 탭 간 동기화) ----------
 function makeStore() {
   if (CFG.supabaseUrl && CFG.supabaseKey && window.supabase) {
     const db = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
     return {
-      live: true,
+      live: true, db,
       // ponytail: 전체 글을 한 번에 로드, 글이 수천 개를 넘으면 장별 페이지 로딩으로 바꿀 것
       async list() { const { data, error } = await db.from('posts').select('*').order('id').limit(5000); if (error) throw error; return data; },
       async add(p) { const { data, error } = await db.from('posts').insert({ ...p, owner_hash: await OWNER }).select().single(); if (error) throw error; return data; },
       // 삭제는 supabase.sql의 delete_post 함수가 토큰 해시를 확인한 뒤에만 수행 (답변도 함께 삭제)
-      async remove(id) { const { data, error } = await db.rpc('delete_post', { p_id: id, p_secret: SECRET }); if (error) throw error; if (!data) throw new Error('본인 글이 아니거나 이미 삭제됐어요'); },
+      async remove(id, secret) { const { data, error } = await db.rpc('delete_post', { p_id: id, p_secret: secret }); if (error) throw error; if (!data) throw new Error('본인 글이 아니거나 이미 삭제됐어요'); },
       // 마킹 형태(색·형광펜/메모지) 변경도 update_mark 함수가 본인 확인 후 수행
-      async update(id, v) { const { data, error } = await db.rpc('update_mark', { p_id: id, p_secret: SECRET, p_color: v.color, p_style: v.style }); if (error) throw error; if (!data) throw new Error('본인 마킹이 아니거나 삭제됐어요'); },
+      async update(id, v, secret) { const { data, error } = await db.rpc('update_mark', { p_id: id, p_secret: secret, p_color: v.color, p_style: v.style }); if (error) throw error; if (!data) throw new Error('본인 마킹이 아니거나 삭제됐어요'); },
       // 구독 연결(재연결 포함)까지 몇 초 걸리므로, 연결될 때마다 서버 목록으로 다시 맞춘다
       onChange(add, del, upd, sync) {
         const t = { schema: 'public', table: 'posts' };
@@ -81,13 +90,13 @@ function makeStore() {
     },
     async remove(id) {
       const rows = read(), row = rows.find(r => r.id === id);
-      if (!row || row.owner_hash !== await OWNER) throw new Error('본인 글이 아니거나 이미 삭제됐어요');
+      if (!row || !mine(row)) throw new Error('본인 글이 아니거나 이미 삭제됐어요');
       localStorage.setItem(KEY, JSON.stringify(rows.filter(r => r.id !== id && r.parent_id !== id)));
       bc?.postMessage({ deleted: id });
     },
     async update(id, v) {
       const rows = read(), row = rows.find(r => r.id === id);
-      if (!row || row.owner_hash !== await OWNER) throw new Error('본인 마킹이 아니거나 삭제됐어요');
+      if (!row || !mine(row)) throw new Error('본인 마킹이 아니거나 삭제됐어요');
       Object.assign(row, v);
       localStorage.setItem(KEY, JSON.stringify(rows));
       bc?.postMessage({ updated: row });
@@ -105,10 +114,7 @@ const applied = new Set();
 const hidden = new Set(safe(() => JSON.parse(localStorage.getItem('qna-hidden') || '[]'), []));
 const treeOpen = new Set(['g-intro', 'g-main', 'g-adv', 'g-app']);
 let cur = null, replyTo = null, chatFilter = 'all', pending = null, firstChat = true;
-const ANIMALS = ['수달', '고래', '부엉이', '다람쥐', '펭귄', '여우', '판다', '고슴도치', '너구리', '토끼', '참새', '해달'];
-let nick = safe(() => localStorage.getItem('qna-nick')) ||
-  `익명 ${ANIMALS[Math.random() * ANIMALS.length | 0]} ${(Math.random() * 256 | 0).toString(16).toUpperCase().padStart(2, '0')}`;
-safe(() => localStorage.setItem('qna-nick', nick));
+const nick = USER ? USER.name : '';
 
 const channel = () => cur || 'lounge';
 const all = () => [...posts.values()];
@@ -203,7 +209,7 @@ function renderHome() {
     h('header', { class: 'hero' },
       h('p', { class: 'eyebrow' }, 'Vibe Coding Workbook · Q&A'),
       h('h1', {}, '워크북 Q&A', h('small', {}, 'MARK · ASK · ANSWER')),
-      h('p', { class: 'pitch' }, '모르는 부분에 형광펜을 긋고 질문하세요. 아는 사람이 답합니다. 로그인 없이, 전부 익명.'),
+      h('p', { class: 'pitch' }, '모르는 부분에 형광펜을 긋고 질문하세요. 아는 사람이 답합니다. 질문은 모두와 공유하고, 🔒 메모는 나만 봅니다.'),
       h('div', { class: 'process-strip' }, ...['본문 드래그', '색 고르기', '질문 올리기', '누구나 답변', '상단 칩으로 바로 이동']
         .flatMap((t, i) => i ? [h('span', { class: 'sep' }, '→'), h('span', {}, t)] : [h('span', {}, t)])),
       h('p', { class: 'stats' }, `${CH.length} Chapters · ${rs.length} Questions · ${answered} Answered`)),
@@ -353,6 +359,7 @@ function renderChapter(c) {
         h('a', { class: 'btn-line', href: 'files/' + encodeURIComponent(c.file), download: c.file }, '⬇ 원문 .md 받기'),
         h('a', { class: 'btn-line', href: 'files/' + encodeURIComponent(c.file), target: '_blank' }, '원문 파일 열기 ↗'),
         h('button', { class: 'btn-line', onclick: openChat }, '💬 이 장 질문방'),
+        h('button', { class: 'btn-line', onclick: openPrivate }, '🔒 내 메모'),
         h('a', { class: 'btn-line', href: '#map' }, '🧭 작업 지도'))),
     c.goal && h('p', { class: 'hook', html: marked.parseInline(c.goal) }),
     c.time && h('p', { class: 'hook-sub' }, '⏱ ' + c.time),
@@ -402,7 +409,7 @@ function applyMark(p) {
   parts.forEach(([n, s, e], k) => {
     if (e < n.data.length) n.splitText(e);
     const t = s > 0 ? n.splitText(s) : n;
-    const m = h('mark', { class: `hl ${p.style === 'sticky' ? 'sticky' : 'highlight'} c-${colorOf(p)}${k === parts.length - 1 ? ' last' : ''}`, 'data-id': p.id, title: p.body });
+    const m = h('mark', { class: `hl ${p.style === 'sticky' ? 'sticky' : 'highlight'} c-${colorOf(p)}${isPriv(p.id) ? ' private' : ''}${k === parts.length - 1 ? ' last' : ''}`, 'data-id': p.id, title: (isPriv(p.id) ? '🔒 ' : '') + p.body });
     t.before(m);
     m.append(t);
   });
@@ -468,8 +475,20 @@ askDlg.addEventListener('close', async () => {
   if (askDlg.returnValue !== 'ok' || !pending) return;
   const body = $('#askBody').value.trim();
   if (!body) return;
+  const style = new FormData($('#askForm')).get('style');
+  if ($('#askPrivate').checked) { // 나만 보기: 공유하지 않고 내 개인 공간에만
+    const m = { ...pending, id: 'p' + Date.now(), chapter: cur, color: askColor, style, body, created_at: new Date().toISOString() };
+    priv.marks.push(m);
+    privSave();
+    applyMark(m);
+    $('#askBody').value = '';
+    pending = null;
+    getSelection().removeAllRanges();
+    schedule();
+    return;
+  }
   try {
-    const row = await store.add({ ...pending, chapter: cur, color: askColor, style: new FormData($('#askForm')).get('style'), body, nick });
+    const row = await store.add({ ...pending, chapter: cur, color: askColor, style, body, nick });
     $('#askBody').value = '';
     pending = null;
     getSelection().removeAllRanges();
@@ -501,9 +520,12 @@ function renderChat() {
   const c = chById(cur);
   $('#chatChannel').textContent = c ? chNum(c) + ' 질문방' : 'LOUNGE';
   $('#chatTitle').textContent = c ? c.short : '전체 라운지';
-  $('#nick').textContent = nick + ' ✎';
+  $('#nick').textContent = nick + ' 님 · 로그아웃';
   $('#mode').textContent = store.live ? '● LIVE · 실시간 저장' : '○ LOCAL · 이 브라우저에만 저장 (config.js 미설정)';
   const list = $('#chatList');
+  document.body.classList.toggle('chat-private', chatFilter === 'private');
+  if (chatFilter === 'private') return renderPrivate(list);
+  list.dataset.view = '';
   const atBottom = firstChat || list.scrollHeight - list.scrollTop - list.clientHeight < 80;
   let rs = roots(channel());
   if (chatFilter === 'open') rs = rs.filter(p => !repliesOf(p.id).length);
@@ -519,7 +541,7 @@ function renderChat() {
 async function removePost(p, n) {
   if (!confirm((isMark(p) ? '이 마킹과 질문을 지울까요?' : '이 글을 지울까요?') + (n ? `
 달린 답변 ${n}개도 함께 지워집니다.` : ''))) return;
-  try { await store.remove(p.id); drop(p.id); }
+  try { await store.remove(p.id, secretFor(p)); drop(p.id); }
   catch (err) { alert('삭제 실패: ' + err.message); }
 }
 
@@ -551,10 +573,7 @@ document.querySelectorAll('.chat-tabs button').forEach(b => b.addEventListener('
   document.querySelectorAll('.chat-tabs button').forEach(x => x.classList.toggle('on', x === b));
   renderChat();
 }));
-$('#nick').addEventListener('click', () => {
-  const v = prompt('닉네임 (익명, 30자 이내)', nick)?.trim();
-  if (v) { nick = v.slice(0, 30); safe(() => localStorage.setItem('qna-nick', nick)); renderChat(); }
-});
+$('#nick').addEventListener('click', logout);
 
 function flashPost(id) {
   const el = document.getElementById('post-' + id);
@@ -580,7 +599,14 @@ main.addEventListener('click', e => {
 const menu = $('#markmenu');
 let menuFor = null;
 function hideMenu() { menu.hidden = true; menuFor = null; }
+function placeMenu(el) {
+  menu.hidden = false;
+  const r = [...el.getClientRects()].pop() || el.getBoundingClientRect();
+  menu.style.top = (scrollY + r.bottom + 6) + 'px';
+  menu.style.left = Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, scrollX + r.right - menu.offsetWidth / 2)) + 'px';
+}
 function showMarkMenu(el) {
+  if (el && isPriv(el.dataset.id)) return showPrivMenu(el);
   const p = el && posts.get(+el.dataset.id);
   if (!p) return hideMenu();
   menuFor = p.id;
@@ -598,10 +624,7 @@ function showMarkMenu(el) {
       btn('💬 질문 보기', false, () => { hideMenu(); openChat(); flashPost(p.id); }),
       own && btn('삭제', false, () => { hideMenu(); removePost(p, n); }, 'del')),
   ].filter(Boolean));
-  menu.hidden = false;
-  const r = [...el.getClientRects()].pop() || el.getBoundingClientRect();
-  menu.style.top = (scrollY + r.bottom + 6) + 'px';
-  menu.style.left = Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, scrollX + r.right - menu.offsetWidth / 2)) + 'px';
+  placeMenu(el);
 }
 async function change(p, v) {
   // 최신 상태 기준으로 계산하고 즉시 반영 → 빠르게 연속으로 눌러도 앞의 변경이 덮이지 않음. 실패하면 되돌림
@@ -609,7 +632,7 @@ async function change(p, v) {
   if (!before) return;
   const next = { color: colorOf(before), style: before.style === 'sticky' ? 'sticky' : 'highlight', ...v };
   upsert({ id: p.id, ...next });
-  try { await store.update(p.id, next); }
+  try { await store.update(p.id, next, secretFor(before)); }
   catch (err) { upsert(before); alert('변경 실패: ' + err.message); }
 }
 // composedPath: 버튼이 메뉴 재렌더로 분리돼도 클릭 시점 경로로 판단
@@ -656,6 +679,167 @@ function jumpToMark(id) {
   if (innerWidth > 1240) flashPost(id);
 }
 
+// ---------- 개인 공간: 내 이름(아이디)에만 저장 — 장별 메모장 + 나만 보기 마킹. 다른 사람에게는 보이지 않는다 ----------
+// 서버는 supabase.sql의 get_private / put_private (비밀 확인 후에만). 함수가 아직 없으면 이 기기에만 저장한다.
+// ponytail: 문서 하나를 통째로 덮어쓰는 최신값 우선 — 두 기기에서 동시에 쓰면 나중 것이 남는다
+const PKEY = 'qna-private:' + (USER ? USER.id : '');
+let priv = safe(() => JSON.parse(localStorage.getItem(PKEY)), null) || { t: 0, memos: {}, marks: [] };
+let privServer = false, privTimer = 0;
+const isPriv = id => String(id)[0] === 'p';
+const privMarks = ch => priv.marks.filter(m => m.chapter === ch);
+
+async function privLoad() {
+  if (!store.db || !USER) return;
+  const { data, error } = await store.db.rpc('get_private', { p_secret: SECRET });
+  if (error) { privServer = false; return schedule(); }
+  privServer = true;
+  if (data && (data.t || 0) > (priv.t || 0)) {
+    main.querySelectorAll('mark.private').forEach(m => unwrap(m.dataset.id));
+    priv = { memos: {}, marks: [], ...data };
+    safe(() => localStorage.setItem(PKEY, JSON.stringify(priv)));
+    $('#chatList').dataset.view = ''; // 메모장 다시 그리기
+  } else if ((priv.t || 0) > (data?.t || 0)) privPush();
+  schedule();
+}
+function privSave() {
+  priv.t = Date.now();
+  safe(() => localStorage.setItem(PKEY, JSON.stringify(priv)));
+  clearTimeout(privTimer);
+  privTimer = setTimeout(privPush, 800);
+}
+async function privPush() {
+  clearTimeout(privTimer);
+  privTimer = 0;
+  if (!privServer) return;
+  const { error } = await store.db.rpc('put_private', { p_secret: SECRET, p_data: priv });
+  if (error) { privServer = false; schedule(); }
+}
+
+function renderPrivate(list) {
+  const ch = channel(), key = 'private:' + ch;
+  let memo = list.querySelector('textarea.memo');
+  if (list.dataset.view !== key || !memo) { // 입력 중에 다시 그려서 커서를 잃지 않게, 채널이 바뀔 때만 새로 만든다
+    memo = h('textarea', { class: 'memo', rows: 9, maxlength: 20000, placeholder: cur ? '이 장에 대한 내 메모 — 나만 봐요' : '전체 메모 — 나만 봐요' });
+    memo.value = priv.memos[ch] || '';
+    memo.addEventListener('input', () => { priv.memos[ch] = memo.value; privSave(); });
+    list.replaceChildren(h('p', { class: 'priv-note mono' }), memo, h('div', { class: 'priv-marks' }));
+    list.dataset.view = key;
+  } else if (document.activeElement !== memo) memo.value = priv.memos[ch] || '';
+  list.querySelector('.priv-note').textContent = privServer
+    ? `🔒 ${USER.name} 님만 보는 메모 · 같은 이름으로 들어오면 다른 기기에서도 보여요`
+    : '🔒 나만 보는 메모 · 지금은 이 기기에만 저장돼요 (서버 개인 공간 준비 전)';
+  const ms = cur ? privMarks(cur) : [];
+  list.querySelector('.priv-marks').replaceChildren(
+    h('p', { class: 'eyebrow mono' }, cur ? `나만 보기 마킹 ${ms.length}` : '나만 보기 마킹은 장을 열면 보여요'),
+    ...ms.map(m => h('div', { class: 'post' },
+      h('div', { class: 'post-meta' }, h('span', { class: 'tag' }, '🔒 ' + label(colorOf(m)) + (m.style === 'sticky' ? ' · 메모' : '')), fmt(m.created_at)),
+      h('button', { class: `post-quote c-${colorOf(m)}`, onclick: () => jumpToMark(m.id) }, h('span', { class: 'go' }, '↗ 위치'), '“' + m.quote + '”'),
+      h('p', { class: 'post-body' }, m.body))));
+}
+function openPrivate() {
+  chatFilter = 'private';
+  document.querySelectorAll('.chat-tabs button').forEach(x => x.classList.toggle('on', x.dataset.f === 'private'));
+  openChat();
+  renderChat();
+}
+
+function showPrivMenu(el) {
+  const m = priv.marks.find(x => x.id === el.dataset.id);
+  if (!m) return hideMenu();
+  menuFor = m.id;
+  const sticky = m.style === 'sticky';
+  const btn = (text, on, fn, cls = '') => h('button', { type: 'button', class: cls + (on ? ' on' : ''), onclick: fn }, text);
+  menu.replaceChildren(
+    h('div', { class: 'mm-head mono' }, h('i', { style: `background:var(--${colorOf(m)})` }), '🔒 나만 보기', h('span', {}, '내 메모')),
+    h('p', { class: 'mm-body' }, m.body),
+    h('div', { class: 'mm-row seg mono' },
+      btn('형광펜', !sticky, () => privChange(m, { style: 'highlight' })), btn('메모지', sticky, () => privChange(m, { style: 'sticky' }))),
+    h('div', { class: 'mm-row swatches' }, COLORS.map(([c, name]) =>
+      h('button', { type: 'button', class: `swatch c-${c}${c === colorOf(m) ? ' on' : ''}`, onclick: () => privChange(m, { color: c }) }, name))),
+    h('div', { class: 'mm-row mm-actions mono' },
+      btn('✎ 고치기', false, () => { const v = prompt('내 메모', m.body)?.trim(); if (v) privChange(m, { body: v.slice(0, 2000) }); }),
+      btn('질문으로 올리기', false, () => { hideMenu(); shareMark(m); }),
+      btn('삭제', false, () => { hideMenu(); if (confirm('이 메모를 지울까요?')) privRemove(m.id); }, 'del')));
+  placeMenu(el);
+}
+function privChange(m, v) {
+  Object.assign(m, v);
+  privSave();
+  restyle(m);
+  const el = main.querySelector(`mark[data-id="${m.id}"]`);
+  if (menuFor === m.id && el) showPrivMenu(el);
+  schedule();
+}
+function privRemove(id) {
+  priv.marks = priv.marks.filter(m => m.id !== id);
+  privSave();
+  unwrap(id);
+  schedule();
+}
+async function shareMark(m) {
+  if (!confirm('이 메모를 질문으로 올릴까요?\n모두에게 보이고, 내 메모에서는 빠집니다.')) return;
+  try {
+    const { block, start_offset, quote, color, style, body, chapter } = m;
+    const row = await store.add({ chapter, block, start_offset, quote, color, style, body, nick });
+    privRemove(m.id);
+    ingest(row);
+    openChat();
+    flashPost(row.id);
+  } catch (err) { alert('올리기 실패: ' + err.message); }
+}
+
+// ---------- 처음 들어올 때: 이름 정하기 ----------
+function renderGate() {
+  document.body.classList.add('gate');
+  const input = h('input', { name: 'n', maxlength: 20, placeholder: '이름 (1~20자)', autocomplete: 'off', spellcheck: 'false', enterkeyhint: 'go', 'aria-label': '이름' });
+  const btn = h('button', { class: 'solid mono' }, '시작하기');
+  const msg = h('p', { class: 'gate-msg', role: 'status' });
+  const say = t => { msg.textContent = t; };
+  main.replaceChildren(h('div', { class: 'gate-box' },
+    h('p', { class: 'eyebrow' }, 'Vibe Coding Workbook · Q&A'),
+    h('h1', {}, '워크북 Q&A'),
+    h('p', { class: 'pitch' }, '사용할 이름을 정해 주세요. 이 이름이 내 아이디가 됩니다.'),
+    h('ul', { class: 'gate-list' },
+      h('li', {}, '질문 · 답변 · 마킹 · 과제 링크는 지금처럼 ', h('b', {}, '모두와 공유'), '되고, 글에는 이 이름이 표시돼요.'),
+      h('li', {}, '🔒 ', h('b', {}, '내 메모장'), '과 ', h('b', {}, '나만 보기 마킹'), '은 이 이름에만 저장돼 다른 사람에게 보이지 않아요.'),
+      h('li', {}, '다른 기기에서도 ', h('b', {}, '같은 이름'), '을 입력하면 내 글과 메모가 이어져요.')),
+    h('form', { class: 'gate-form', onsubmit: e => { e.preventDefault(); submitName(input.value, btn, say); } }, input, btn),
+    msg,
+    h('p', { class: 'gate-note' }, '비밀번호가 없어서 이름을 아는 사람은 그 이름으로 들어올 수 있어요. 겹치지 않게 이름+숫자(예: 김민재27)처럼 정하는 걸 추천해요.')));
+  setTimeout(() => { if (innerWidth >= 700) input.focus(); }, 50);
+}
+async function submitName(raw, btn, say) {
+  const name = cleanName(raw), id = name.toLowerCase();
+  if (!name || name.length > 20) return say('이름은 1~20자로 정해 주세요.');
+  if (/[:/\\#?]/.test(name)) return say('이름에 : / \\ # ? 는 쓸 수 없어요.');
+  btn.disabled = true;
+  say('확인 중…');
+  try {
+    if (store.db) {
+      const sec = secretOf(id), hash = await sha(sec);
+      const [a, b] = await Promise.all([
+        store.db.from('posts').select('id').eq('owner_hash', hash).limit(1),
+        store.db.rpc('get_private', { p_secret: sec }),
+      ]);
+      if (a.error) throw a.error;
+      if ((a.data.length || b.data) && !confirm(`‘${name}’ 이름으로 쓴 글이나 메모가 있어요.\n본인이면 확인을 눌러 이어서 쓰세요. 다른 사람이면 취소하고 다른 이름을 정해 주세요.`)) {
+        btn.disabled = false;
+        return say('다른 이름을 입력해 주세요.');
+      }
+    }
+  } catch { btn.disabled = false; return say('서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.'); }
+  safe(() => localStorage.setItem(USER_KEY, JSON.stringify({ id, name })));
+  location.reload();
+}
+async function logout() {
+  if (!confirm(`‘${USER.name}’에서 로그아웃할까요?\n공유한 질문·답변은 그대로 남고, 같은 이름으로 다시 들어오면 내 메모도 이어서 볼 수 있어요.`)) return;
+  if (privServer) { await privPush(); safe(() => localStorage.removeItem(PKEY)); } // 서버에 있으니 이 기기 사본은 지운다
+  else if (!confirm('개인 메모가 아직 서버에 없고 이 기기에만 있어요. 이 기기에는 남겨 둡니다.\n로그아웃할까요?')) return;
+  safe(() => localStorage.removeItem(USER_KEY));
+  location.hash = '';
+  location.reload();
+}
+
 // ---------- 갱신 ----------
 let queued = false;
 function schedule() {
@@ -700,7 +884,7 @@ function refresh() {
   renderTree();
   renderStrip();
   renderChat();
-  if (cur) { roots(cur).filter(isMark).forEach(applyMark); updateFolderCounts(); }
+  if (cur) { roots(cur).filter(isMark).forEach(applyMark); privMarks(cur).forEach(applyMark); updateFolderCounts(); }
 }
 function ingest(p) {
   if (!p || posts.has(p.id)) return;
@@ -711,13 +895,20 @@ function ingest(p) {
 function upsert(p) {
   if (!posts.has(p.id)) return ingest(p);
   posts.set(p.id, { ...posts.get(p.id), ...p });
-  const q = posts.get(p.id);
-  main.querySelectorAll(`mark[data-id="${p.id}"]`).forEach(m => {
-    m.classList.remove('highlight', 'sticky', ...COLORS.map(c => 'c-' + c[0]));
-    m.classList.add(q.style === 'sticky' ? 'sticky' : 'highlight', 'c-' + colorOf(q));
-  });
+  restyle(posts.get(p.id));
   if (menuFor === p.id) showMarkMenu(main.querySelector(`mark[data-id="${p.id}"]`));
   schedule();
+}
+function restyle(q) {
+  main.querySelectorAll(`mark[data-id="${q.id}"]`).forEach(m => {
+    m.classList.remove('highlight', 'sticky', ...COLORS.map(c => 'c-' + c[0]));
+    m.classList.add(q.style === 'sticky' ? 'sticky' : 'highlight', 'c-' + colorOf(q));
+    m.title = (isPriv(q.id) ? '🔒 ' : '') + q.body;
+  });
+}
+function unwrap(id) {
+  applied.delete(id);
+  main.querySelectorAll(`mark[data-id="${id}"]`).forEach(m => { const par = m.parentNode; m.replaceWith(...m.childNodes); par.normalize(); });
 }
 function sync(rows) {
   const ids = new Set(rows.map(r => r.id));
@@ -730,8 +921,7 @@ function drop(id) {
   if (replyTo?.id === id) setReply(null);
   for (const g of [id, ...repliesOf(id).map(r => r.id)]) {
     posts.delete(g);
-    applied.delete(g);
-    main.querySelectorAll(`mark[data-id="${g}"]`).forEach(m => { const par = m.parentNode; m.replaceWith(...m.childNodes); par.normalize(); });
+    unwrap(g);
   }
   schedule();
 }
@@ -739,11 +929,18 @@ function drop(id) {
 marked.use({ gfm: true });
 renderCatnav();
 renderLegend();
-addEventListener('hashchange', route);
-route();
-store.list()
-  .then(rows => { rows.forEach(r => posts.set(r.id, r)); if (view === null) renderHome(); route(); })
-  .catch(err => { $('#mode').textContent = '불러오기 실패: ' + err.message; });
-store.onChange(ingest, drop, upsert, sync);
-OWNER.then(h => { myHash = h; schedule(); });
+if (!USER) renderGate();
+else {
+  addEventListener('hashchange', route);
+  route();
+  store.list()
+    .then(rows => { rows.forEach(r => posts.set(r.id, r)); if (view === null) renderHome(); route(); })
+    .catch(err => { $('#mode').textContent = '불러오기 실패: ' + err.message; });
+  store.onChange(ingest, drop, upsert, sync);
+  OWNER.then(h => { myHash = h; schedule(); });
+  if (LEGACY) sha(LEGACY).then(h => { legacyHash = h; schedule(); });
+  privLoad();
+  // 다른 기기에서 쓴 메모 받아오기 / 탭을 떠날 때 남은 저장 보내기
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' ? privLoad() : privTimer && privPush());
+}
 })();

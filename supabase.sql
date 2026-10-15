@@ -60,3 +60,28 @@ do $$ begin
     alter publication supabase_realtime add table public.posts;
   end if;
 end $$;
+
+-- 개인 공간 (이름 로그인): 아이디별 메모장·나만 보기 마킹. 정책이 없으므로 표를 직접 읽거나 쓸 수 없고,
+-- 아래 두 함수로만 접근한다. p_secret = 'workbook-qna:user:' + 아이디, 저장 키는 그 SHA-256
+create table if not exists public.private_notes (
+  owner_hash  text primary key check (char_length(owner_hash) = 64),
+  data        jsonb not null default '{}'::jsonb check (pg_column_size(data) <= 500000),
+  updated_at  timestamptz not null default now()
+);
+alter table public.private_notes enable row level security;
+
+create or replace function public.get_private(p_secret text) returns jsonb
+language sql security definer set search_path = public, extensions as $$
+  select data from public.private_notes where owner_hash = encode(extensions.digest(p_secret, 'sha256'), 'hex');
+$$;
+create or replace function public.put_private(p_secret text, p_data jsonb) returns boolean
+language sql security definer set search_path = public, extensions as $$
+  insert into public.private_notes (owner_hash, data, updated_at)
+  values (encode(extensions.digest(p_secret, 'sha256'), 'hex'), p_data, now())
+  on conflict (owner_hash) do update set data = excluded.data, updated_at = now()
+  returning true;
+$$;
+revoke all on function public.get_private(text) from public;
+revoke all on function public.put_private(text, jsonb) from public;
+grant execute on function public.get_private(text) to anon, authenticated;
+grant execute on function public.put_private(text, jsonb) to anon, authenticated;
