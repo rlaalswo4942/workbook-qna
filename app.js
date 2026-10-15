@@ -125,7 +125,7 @@ const fmt = ts => {
 // ---------- 상단: 카테고리 + 마킹 바 ----------
 function renderCatnav() {
   const nav = $('#catnav');
-  nav.replaceChildren();
+  nav.replaceChildren(h('a', { href: '#map', 'data-id': 'map' }, h('span', { class: 'n' }, 'MAP'), '작업 지도'), h('span', { class: 'sep' }));
   GROUPS.forEach(([g], gi) => {
     if (gi) nav.append(h('span', { class: 'sep' }));
     CH.filter(c => c.group === g).forEach(c =>
@@ -177,6 +177,7 @@ function renderTree() {
   };
   tree.replaceChildren(
     h('a', { href: '#', class: 'mono', style: 'font-size:.72rem;text-decoration:none;color:var(--text-3)' }, '← 전체 보기'),
+    h('a', { href: '#map', class: 'tree-map' }, '🧭 작업 지도 — 어디서 무엇을'),
     ...GROUPS.map(([g, name]) => folder('g-' + g, 'grp', [name],
       h('div', {}, ...CH.filter(c => c.group === g).map(c => {
         const marks = roots(c.id).filter(visibleMark);
@@ -206,6 +207,8 @@ function renderHome() {
       h('div', { class: 'process-strip' }, ...['본문 드래그', '색 고르기', '질문 올리기', '누구나 답변', '상단 칩으로 바로 이동']
         .flatMap((t, i) => i ? [h('span', { class: 'sep' }, '→'), h('span', {}, t)] : [h('span', {}, t)])),
       h('p', { class: 'stats' }, `${CH.length} Chapters · ${rs.length} Questions · ${answered} Answered`)),
+    h('a', { class: 'map-banner', href: '#map' }, h('b', {}, '🧭 작업 지도'),
+      h('span', {}, 'GitHub · VS Code · 이 사이트를 오가다 헷갈릴 때 — 어디서 무엇을 하는지 한 장에')),
     ...GROUPS.map(([g, name], gi) => h('section', { class: 'category' },
       h('div', { class: 'category-head' }, h('span', { class: 'cat-num' }, String(gi + 1).padStart(2, '0')), h('h2', {}, name)),
       h('div', { class: 'grid' }, ...CH.filter(c => c.group === g).map(c => {
@@ -234,6 +237,88 @@ function guideBlock(title, body) {
   return body && h('div', { class: 'd-block' }, h('h2', {}, title), body);
 }
 
+// ---------- 어디서 · 어떻게 (data/where.js) ----------
+const W = window.WHERE || { PLACES: {}, STEPS: {}, FILES: {}, SUBMIT: [], SUBMIT1: [] };
+const inl = (tag, s, attrs = {}) => h(tag, { ...attrs, html: marked.parseInline(s) });
+const chip = k => { const p = W.PLACES[k]; return p && h('a', { class: 'place ' + p.side, href: `#map:p-${k}`, title: plain(p.open) }, p.name); };
+const chips = ks => h('span', { class: 'places' }, ks.map(chip));
+const stepName = t => t.replace(/^Step \d+\.\s*/, '');
+
+function stepsBlock(c) {
+  const data = W.STEPS[c.id];
+  if (!data) return guideBlock('실습 순서', h('ol', {}, c.steps.map(t => h('li', {}, stepName(t)))));
+  return guideBlock('실습 순서 · 어디서 어떻게', h('div', {},
+    h('p', { class: 'where-legend' }, h('span', { class: 'place local' }, '내 컴퓨터'), h('span', { class: 'place web' }, '인터넷'),
+      h('span', { class: 'place etc' }, '사람·기기'), h('span', {}, 'Step을 누르면 순서가 펼쳐지고, 칩을 누르면 그곳을 여는 법이 나와요 · '), h('a', { href: '#map' }, '🧭 작업 지도')),
+    c.order >= 3 && inl('p', W.PRE.replace('{n}', c.order), { class: 'where-pre' }),
+    h('ol', { class: 'steps' }, c.steps.map((t, i) => {
+      const s = data[i] || {};
+      return h('li', {}, h('details', {},
+        h('summary', {}, h('span', { class: 'st' }, stepName(t)), s.w && chips(s.w)),
+        s.how && h('ol', { class: 'how' }, s.how.map(x => inl('li', x))),
+        s.ok && inl('p', '확인 — ' + s.ok, { class: 'ok' }),
+        s.tip && inl('p', s.tip, { class: 'tip' })));
+    }))));
+}
+
+function filesBlock(c) {
+  const fs = W.FILES[c.id];
+  return fs && guideBlock('만들고 고치는 파일 · 어디서', h('table', { class: 'wtable' }, fs.map(([f, k, d]) =>
+    h('tr', {}, inl('td', f), h('td', {}, chip(k)), inl('td', d)))));
+}
+
+function submitBlock(c) {
+  if (c.group === 'app' || c.order < 1) return null;
+  return guideBlock('제출 · 어디서', h('ol', { class: 'flow-list' },
+    (c.order === 1 ? W.SUBMIT1 : W.SUBMIT).map(([k, t]) => h('li', {}, chip(k), inl('span', t)))));
+}
+
+function renderMap() {
+  cur = null;
+  const P = W.PLACES;
+  const sec = (num, title, id, ...body) => h('section', { class: 'category', id: 'map-' + id },
+    h('div', { class: 'category-head' }, h('span', { class: 'cat-num' }, num), h('h2', {}, title)), ...body);
+  const table = (head, rows) => h('table', { class: 'wtable' },
+    h('tr', {}, head.map(t => h('th', {}, t))), rows.map(r => h('tr', {}, r.map(x => x instanceof Node ? h('td', {}, x) : inl('td', x)))));
+  const arrow = t => h('span', { class: 'arrow mono' }, t);
+  const usedBy = c => [...new Set((W.STEPS[c.id] || []).flatMap(s => s.w))];
+  main.replaceChildren(
+    h('header', { class: 'detail-head' },
+      h('p', { class: 'detail-tags' }, h('span', {}, 'Work Map'), h('span', {}, '·'), h('span', {}, '전 장 공통')),
+      h('h1', {}, '작업 지도 — 어디서 무엇을 하나')),
+    h('p', { class: 'hook' }, '워크북은 이 사이트에서 읽고, 코드는 VS Code에서 고치고, 결과는 GitHub로 올린다.'),
+    h('p', { class: 'hook-sub' }, '길을 잃으면 "지금 하려는 일이 아래 어느 칸인가"부터 찾는다. 각 장 가이드의 Step에 붙은 칩도 여기로 연결된다.'),
+    sec('01', '큰 그림', 'flow',
+      h('div', { class: 'lane' }, h('p', { class: 'lane-name mono' }, '내 컴퓨터 — 만들고 확인한다'),
+        h('div', { class: 'flow' }, chip('qna'), arrow('복사 →'), chip('ai'), arrow('→'), chip('code'), arrow('Ctrl+S →'), chip('live'), arrow('이상하면'), chip('f12'))),
+      h('div', { class: 'lane' }, h('p', { class: 'lane-name mono' }, '내 컴퓨터 → 인터넷 — 올리고 공개한다'),
+        h('div', { class: 'flow' }, chip('git'), arrow('Commit → Sync →'), chip('gh'), arrow('1~2분 →'), chip('pages'), arrow('→'), chip('phone'), chip('people'), arrow('→ 제출'), chip('qna'))),
+      h('p', { class: 'card-desc' }, '위 줄은 매일 수십 번, 아래 줄은 Step이 끝날 때마다 한 번. 위 줄에서 아무리 고쳐도 아래 줄을 안 거치면 남에게는 안 보인다.')),
+    sec('02', '장소별 — 여는 법 · 하는 일 · 하지 않는 일', 'places',
+      h('div', { class: 'place-grid' }, Object.entries(P).map(([k, p]) => h('div', { class: 'place-card', id: 'map-p-' + k },
+        h('p', {}, chip(k)), inl('p', p.open, { class: 'open' }),
+        h('ul', {}, p.do.map(x => inl('li', x))),
+        p.dont && inl('p', p.dont, { class: 'dont' }))))),
+    sec('03', '매주 흐름 — 3장부터 거의 같다', 'loop',
+      h('ol', { class: 'flow-list' }, W.LOOP.map(([k, t, ok]) => h('li', {}, chip(k), inl('span', t), ok && inl('small', '확인 — ' + ok))))),
+    sec('04', '주소 네 개 — 가장 많이 헷갈리는 것', 'addr',
+      table(['주소', '이름', '특징', '언제 쓰나'], W.ADDR)),
+    sec('05', '저장의 네 단계', 'save',
+      table(['하는 것', '저장되는 곳', '결과', '어디서'], W.SAVE),
+      h('p', { class: 'card-desc' }, 'Ctrl+S만 하면 내 화면에만, Commit까지 하면 되돌릴 수 있게, Sync까지 해야 남에게 보인다.')),
+    sec('06', '되돌리기 — 무엇을 어디까지', 'undo',
+      table(['버튼', '되돌리는 범위', '언제', '어디서'], W.UNDO)),
+    sec('07', '자주 헷갈리는 것', 'faq',
+      ...W.FAQ.map(([q, a]) => h('details', { class: 'folder' }, inl('summary', q), inl('p', a, { class: 'md faq-a' })))),
+    sec('08', '장별로 오가는 곳', 'chapters',
+      table(['장', '주로 오가는 곳', '새로 생기는 파일'], CH.filter(c => W.STEPS[c.id]).map(c => [
+        h('a', { href: `#${c.id}:guide` }, `${chNum(c)} ${c.short}`),
+        chips(usedBy(c)),
+        (W.FILES[c.id] || []).map(f => f[0]).join(' · '),
+      ]))),
+  );
+}
+
 function renderChapter(c) {
   cur = c.id;
   applied.clear();
@@ -244,10 +329,12 @@ function renderChapter(c) {
     h('p', { class: 'eyebrow' }, 'Guide · 핵심 요약'),
     c.goals.length ? guideBlock('학습 목표', h('ul', {}, c.goals.map(li))) : null,
     c.concepts.length ? guideBlock('핵심 개념', h('div', { class: 'pill-list' }, c.concepts.map(t => h('span', {}, t.replace(/^\d+\.\d+\s*/, ''))))) : null,
-    c.steps.length ? guideBlock('실습 순서', h('ol', {}, c.steps.map(t => h('li', {}, t.replace(/^Step \d+\.\s*/, ''))))) : null,
+    c.steps.length ? stepsBlock(c) : null,
     c.tasks.length ? guideBlock('과제', h('ul', {}, c.tasks.map(t => h('li', { class: 'task' + (/필수/.test(t) ? ' must' : '') },
       t.replace(/\s*\(필수\)/, ''), /필수/.test(t) && h('span', { class: 'badge' }, '필수'))))) : null,
+    filesBlock(c),
     c.checklist.length ? guideBlock('제출 체크리스트', h('ul', { class: 'check' }, c.checklist.map(li))) : null,
+    submitBlock(c),
     (isApp || !c.goals.length) ? guideBlock('구성', h('ul', {}, c.sections.map((s, i) => h('li', {}, h('a', { href: `#${c.id}:s${i + 1}` }, s.title))))) : null,
     c.links.length ? guideBlock('필수 링크', h('div', { class: 'links' }, c.links.map(([t, u]) => h('a', { href: u, target: '_blank', rel: 'noopener' }, t + ' ↗')))) : null,
     c.troubles.length ? guideBlock('자주 막히는 지점', h('table', { class: 'trouble' }, c.troubles.map(r =>
@@ -265,7 +352,8 @@ function renderChapter(c) {
       h('div', { class: 'detail-links' },
         h('a', { class: 'btn-line', href: 'files/' + encodeURIComponent(c.file), download: c.file }, '⬇ 원문 .md 받기'),
         h('a', { class: 'btn-line', href: 'files/' + encodeURIComponent(c.file), target: '_blank' }, '원문 파일 열기 ↗'),
-        h('button', { class: 'btn-line', onclick: openChat }, '💬 이 장 질문방'))),
+        h('button', { class: 'btn-line', onclick: openChat }, '💬 이 장 질문방'),
+        h('a', { class: 'btn-line', href: '#map' }, '🧭 작업 지도'))),
     c.goal && h('p', { class: 'hook', html: marked.parseInline(c.goal) }),
     c.time && h('p', { class: 'hook-sub' }, '⏱ ' + c.time),
     !c.goal && h('div', { style: 'border-top:1px solid var(--ink);margin-bottom:2rem' }),
@@ -532,16 +620,24 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') hideMenu(); 
 function go(hash) {
   hideMenu(); if (location.hash === hash) route(); else location.hash = hash; }
 
+let view = null; // 지금 화면: 장 id / 'map' / null(홈)
 function route() {
   const [id, part = ''] = decodeURIComponent(location.hash.slice(1)).split(':');
   const c = chById(id);
-  const changed = (c ? c.id : null) !== cur || !main.firstChild;
-  if (changed) { c ? renderChapter(c) : renderHome(); setReply(null); firstChat = true; }
+  const v = c ? c.id : id === 'map' ? 'map' : null;
+  const changed = v !== view || !main.firstChild;
+  if (changed) { view = v; c ? renderChapter(c) : v === 'map' ? renderMap() : renderHome(); setReply(null); firstChat = true; }
   refresh();
   document.querySelectorAll('#catnav a').forEach(a => {
-    a.classList.toggle('active', a.dataset.id === cur);
-    if (a.dataset.id === cur) a.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    a.classList.toggle('active', a.dataset.id === view);
+    if (a.dataset.id === view) a.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   });
+  if (v === 'map') {
+    const t = part && document.getElementById('map-' + part);
+    if (t) { t.scrollIntoView({ behavior: 'smooth' }); t.classList.add('flash'); setTimeout(() => t.classList.remove('flash'), 1600); }
+    else if (changed) scrollTo(0, 0);
+    return;
+  }
   if (/^m\d+$/.test(part)) return jumpToMark(part.slice(1));
   const target = c && /^(s\d+|guide|src)$/.test(part) && document.getElementById(`${c.id}-${part}`);
   if (target) { if (target.tagName === 'DETAILS') target.open = true; target.scrollIntoView({ behavior: 'smooth' }); }
@@ -565,7 +661,7 @@ let queued = false;
 function schedule() {
   if (queued) return;
   queued = true;
-  requestAnimationFrame(() => { queued = false; if (!cur) renderHome(); refresh(); });
+  requestAnimationFrame(() => { queued = false; if (view === null) renderHome(); refresh(); });
 }
 // ---------- 사이드바 최하단: 저장소 · 과제 제출 링크 ----------
 const isHttps = u => /^https:\/\/\S+$/.test(u || '');
@@ -646,7 +742,7 @@ renderLegend();
 addEventListener('hashchange', route);
 route();
 store.list()
-  .then(rows => { rows.forEach(r => posts.set(r.id, r)); if (!cur) renderHome(); route(); })
+  .then(rows => { rows.forEach(r => posts.set(r.id, r)); if (view === null) renderHome(); route(); })
   .catch(err => { $('#mode').textContent = '불러오기 실패: ' + err.message; });
 store.onChange(ingest, drop, upsert, sync);
 OWNER.then(h => { myHash = h; schedule(); });
